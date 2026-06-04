@@ -59,7 +59,25 @@ const input = [
 ].join('\n');
 
 const html = sandbox.__mdToHtml(input);
+// No placeholder from any of the four families should remain in the
+// output — if any does, the corresponding restoration pass is broken.
 assert.equal(html.includes('___ALLOWED_HTML_'), false, html);
+assert.equal(html.includes('___CODE_BLOCK_'), false, html);
+assert.equal(html.includes('___MATH_BLOCK_'), false, html);
+assert.equal(html.includes('___MERMAID_BLOCK_'), false, html);
+
+// The original code content must be preserved verbatim.
 assert.equal(html.includes('appendChild'), true, html);
+
+// The <script> tag inside the code sample must be HTML-escaped (not
+// emitted as a live script element) and the blockquote "> " prefix
+// must be stripped from each line of the code body.
+assert.equal(html.includes('&lt;script&gt;'), true, html);
+assert.equal(html.includes('<script>'), false, html);
+assert.equal(html.includes('&gt; &lt;'), false, html);
+
+// The code block should be wrapped in <pre><code> with the language
+// class applied.
+assert.match(html, /<pre><code[^>]*language-html/);
 
 console.log('ok');

@@ -425,6 +425,14 @@ export function mdToHtml(src) {
   const allowedHtmlBlocks = [];
   const codeBlocks = [];
   const mermaidBlocks = [];
+  // Per-render unique suffix. Including it in every placeholder makes
+  // them effectively impossible for user-typed content to collide with
+  // (e.g. an agent explaining how the sanitizer works, or a literal
+  // "___ALLOWED_HTML_0___" inside a code sample). Combined with the
+  // split+join restoration below, it also guarantees that every
+  // occurrence of a real placeholder is replaced — String#replace with
+  // a string argument only swaps the first match.
+  const _renderId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   let s = (src ?? '');
 
   // Extract fenced code blocks before any markdown/HTML preservation passes.
@@ -433,7 +441,13 @@ export function mdToHtml(src) {
   // placeholder gets captured as literal code content and never restored inside
   // the final <pre><code> block.
   s = s.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
-    const cleaned = code
+    // Strip the blockquote marker (e.g. "> ") from each captured line.
+    // When a fenced code block sits inside a blockquote the markdown
+    // source has "> " on every line, but that prefix is blockquote
+    // syntax, not code content — strip it so the rendered block shows
+    // the code itself, not "> const x = 1".
+    const unquoted = code.replace(/^> ?/gm, '');
+    const cleaned = unquoted
       .replace(/\r\n/g, '\n')
       .replace(/[ \t]+$/gm, '')
       .replace(/^\s*\n+/, '')
@@ -443,13 +457,13 @@ export function mdToHtml(src) {
     if (lang && lang.toLowerCase() === 'mermaid') {
       const mermaidId = 'mermaid-' + Date.now() + '-' + mermaidBlocks.length;
       const raw = cleaned.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-      const placeholder = `___MERMAID_BLOCK_${mermaidBlocks.length}___`;
+      const placeholder = `___MERMAID_BLOCK_${_renderId}_${mermaidBlocks.length}___`;
       mermaidBlocks.push(`<div class="mermaid-container"><pre class="mermaid" id="${mermaidId}">${escapeHtml(raw)}</pre></div>`);
       return placeholder;
     }
 
     const escaped = cleaned.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-    const placeholder = `___CODE_BLOCK_${codeBlocks.length}___`;
+    const placeholder = `___CODE_BLOCK_${_renderId}_${codeBlocks.length}___`;
 
     const langClass = lang ? ` class="language-${lang}"` : '';
     const runnableLangs = ['python','py','javascript','js','html','bash','sh','shell','zsh'];
@@ -519,14 +533,14 @@ export function mdToHtml(src) {
   // Extract <details>...</details> blocks and replace with placeholders
   // Default to open so agent output is visible
   s = s.replace(/<details>([\s\S]*?)<\/details>/gi, (match) => {
-    const placeholder = `___ALLOWED_HTML_${allowedHtmlBlocks.length}___`;
+    const placeholder = `___ALLOWED_HTML_${_renderId}_${allowedHtmlBlocks.length}___`;
     allowedHtmlBlocks.push(sanitizeAllowedHtml(match.replace(/<details>/i, '<details open>')));
     return placeholder;
   });
 
   // ALSO preserve <a> tags the same way (they're now in the HTML from markdown conversion)
   s = s.replace(/<a\s+[^>]*>.*?<\/a>/gi, (match) => {
-    const placeholder = `___ALLOWED_HTML_${allowedHtmlBlocks.length}___`;
+    const placeholder = `___ALLOWED_HTML_${_renderId}_${allowedHtmlBlocks.length}___`;
     allowedHtmlBlocks.push(sanitizeAllowedHtml(match));
     return placeholder;
   });
@@ -544,7 +558,7 @@ export function mdToHtml(src) {
     s = s.replace(/\\\[([\s\S]*?)\\\]/g, (match, math) => {
       try {
         const raw = math.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-        const placeholder = `___MATH_BLOCK_${mathBlocks.length}___`;
+        const placeholder = `___MATH_BLOCK_${_renderId}_${mathBlocks.length}___`;
         mathBlocks.push(katex.renderToString(raw.trim(), { displayMode: true, throwOnError: false }));
         return placeholder;
       } catch (e) { return match; }
@@ -554,7 +568,7 @@ export function mdToHtml(src) {
     s = s.replace(/\\\(([^\n]*?)\\\)/g, (match, math) => {
       try {
         const raw = math.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-        const placeholder = `___MATH_BLOCK_${mathBlocks.length}___`;
+        const placeholder = `___MATH_BLOCK_${_renderId}_${mathBlocks.length}___`;
         mathBlocks.push(katex.renderToString(raw.trim(), { displayMode: false, throwOnError: false }));
         return placeholder;
       } catch (e) { return match; }
@@ -563,7 +577,7 @@ export function mdToHtml(src) {
     s = s.replace(/\$\$([\s\S]*?)\$\$/g, (match, math) => {
       try {
         const raw = math.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-        const placeholder = `___MATH_BLOCK_${mathBlocks.length}___`;
+        const placeholder = `___MATH_BLOCK_${_renderId}_${mathBlocks.length}___`;
         mathBlocks.push(katex.renderToString(raw.trim(), { displayMode: true, throwOnError: false }));
         return placeholder;
       } catch (e) { return match; }
@@ -572,7 +586,7 @@ export function mdToHtml(src) {
     s = s.replace(/(?<!\$)\$(?!\$)([^\$\n]+?)\$(?!\$)/g, (match, math) => {
       try {
         const raw = math.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-        const placeholder = `___MATH_BLOCK_${mathBlocks.length}___`;
+        const placeholder = `___MATH_BLOCK_${_renderId}_${mathBlocks.length}___`;
         mathBlocks.push(katex.renderToString(raw.trim(), { displayMode: false, throwOnError: false }));
         return placeholder;
       } catch (e) { return match; }
@@ -581,7 +595,12 @@ export function mdToHtml(src) {
 
   // Handle pipe tables
   s = s.replace(/(?:^|\n)([^\n]*\|[^\n]*\|[^\n]*)(?:\n([^\n]*\|[^\n]*\|[^\n]*))*/g, (table) => {
-    if (table.includes('___CODE_BLOCK_') || table.includes('___ALLOWED_HTML_')) return table;
+    if (
+      table.includes('___CODE_BLOCK_') ||
+      table.includes('___ALLOWED_HTML_') ||
+      table.includes('___MATH_BLOCK_') ||
+      table.includes('___MERMAID_BLOCK_')
+    ) return table;
 
     const rows = table.trim().split('\n');
     if (rows.length < 2) return table;
@@ -612,7 +631,12 @@ export function mdToHtml(src) {
 
   // Inline code (but not placeholders)
   s = s.replace(/`([^`]+?)`/g, (match, code) => {
-    if (code.startsWith('___CODE_BLOCK_') || code.startsWith('___ALLOWED_HTML_')) return match;
+    if (
+      code.startsWith('___CODE_BLOCK_') ||
+      code.startsWith('___ALLOWED_HTML_') ||
+      code.startsWith('___MATH_BLOCK_') ||
+      code.startsWith('___MERMAID_BLOCK_')
+    ) return match;
     return `<code>${code}</code>`;
   });
 
@@ -660,22 +684,22 @@ export function mdToHtml(src) {
 
   // CRITICAL: Restore allowed HTML blocks first
   allowedHtmlBlocks.forEach((block, index) => {
-    s = s.replace(`___ALLOWED_HTML_${index}___`, block);
+    s = s.split(`___ALLOWED_HTML_${_renderId}_${index}___`).join(block);
   });
 
   // Restore math blocks
   mathBlocks.forEach((block, index) => {
-    s = s.replace(`___MATH_BLOCK_${index}___`, block);
+    s = s.split(`___MATH_BLOCK_${_renderId}_${index}___`).join(block);
   });
 
   // Restore mermaid diagram blocks
   mermaidBlocks.forEach((block, index) => {
-    s = s.replace(`___MERMAID_BLOCK_${index}___`, block);
+    s = s.split(`___MERMAID_BLOCK_${_renderId}_${index}___`).join(block);
   });
 
   // CRITICAL: Restore code blocks at the end
   codeBlocks.forEach((block, index) => {
-    s = s.replace(`___CODE_BLOCK_${index}___`, block);
+    s = s.split(`___CODE_BLOCK_${_renderId}_${index}___`).join(block);
   });
 
   return _useSvgEmoji() ? svgifyEmoji(s) : s;
