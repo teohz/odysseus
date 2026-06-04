@@ -212,17 +212,27 @@ def get_setting(key: str, default: Any = None) -> Any:
 
 
 def is_setting_overridden(key: str) -> bool:
-    """True if ``key`` is explicitly present in the saved settings file.
+    """True if ``key`` is present in the saved settings file with a value
+    DIFFERENT from its default.
 
     ``load_settings`` merges DEFAULT_SETTINGS with the saved file, so a value
     equal to its default is indistinguishable from "never set" via get_setting.
     Callers that need to treat an explicit user choice differently from the
     default (e.g. adaptive budgets) use this to read the raw saved file.
+
+    Presence alone is NOT enough: most installs write the full DEFAULT_SETTINGS
+    dict to settings.json on first run (installers, settings UIs that persist
+    every key, etc.), so a key being in the file does not mean the user chose
+    that value. Without the value comparison, a default ``6000`` written by the
+    installer would block the agent loop's large-context bypass on a 1M-context
+    model (#1170 follow-up).
     """
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             saved = json.load(f)
-        return isinstance(saved, dict) and key in saved
+        if not isinstance(saved, dict) or key not in saved:
+            return False
+        return saved[key] != DEFAULT_SETTINGS.get(key)
     except (FileNotFoundError, json.JSONDecodeError):
         return False
 

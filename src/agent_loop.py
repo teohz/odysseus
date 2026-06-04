@@ -1600,12 +1600,22 @@ async def stream_agent_loop(
             # Scale the default budget to the model's context window so long-context
             # models aren't silently capped at 6000; an explicit user setting is
             # still honoured (clamped to the window). (#1170)
-            effective_budget = compute_input_token_budget(
-                soft_budget,
-                context_length,
-                is_setting_overridden("agent_input_token_budget"),
-                hard_max=hard_max,
-            )
+            #
+            # For very large context windows (>= 100K tokens, e.g. minimax-m3's
+            # 1M window), the hard_max ceiling is too low — it caps auto-scaling
+            # at a tiny fraction of the window and causes trim_for_context to
+            # chop the middle out of legitimately-sized pastes. Bypass hard_max
+            # and use 75% of the context window directly. Still leaves plenty of
+            # room for the response (typically a few thousand tokens).
+            if context_length >= 100000 and not is_setting_overridden("agent_input_token_budget"):
+                effective_budget = int(context_length * 0.75)
+            else:
+                effective_budget = compute_input_token_budget(
+                    soft_budget,
+                    context_length,
+                    is_setting_overridden("agent_input_token_budget"),
+                    hard_max=hard_max,
+                )
             trimmed_messages = trim_for_context(
                 messages,
                 effective_budget,
